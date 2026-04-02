@@ -1,36 +1,83 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Assignment 17 App Starter (Person A+B)
 
-## Getting Started
+This is a Next.js App Router starter for your Chapter 17 deployment assignment.
 
-First, run the development server:
+It includes:
+- Select Customer screen (no auth)
+- Customer dashboard
+- Place new order flow
+- Order history page
+- Late Delivery Priority Queue page
+- Run Scoring button (`POST /api/scoring/run`)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+The app uses Supabase when env vars are configured, and falls back to local mock data for quick development.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Quick Start
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Install and run:
+   - `npm install`
+   - `npm run dev`
+2. Open [http://localhost:3000](http://localhost:3000)
+3. Select a customer, then test the app flows.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Environment Variables
 
-## Learn More
+Copy `.env.local.example` to `.env.local` and set:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-To learn more about Next.js, take a look at the following resources:
+If these are not set, the app uses in-memory mock data.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Core Routes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `/` Select Customer
+- `/dashboard` Customer dashboard
+- `/orders/new` Place new order
+- `/orders/history` Order history
+- `/warehouse` Late delivery queue
+
+## API Routes
+
+- `GET /api/select-customer?customer_id=<id>` sets selected customer cookie
+- `POST /api/orders` creates a new order
+- `POST /api/scoring/run` runs scoring and redirects to warehouse queue
+
+## Next Steps (Person A)
+
+- Add `shop.db` -> Supabase migration script and run row-count checks.
+- Replace any remaining mock assumptions with real Supabase tables.
+- Add basic error handling and user-facing success/error messages.
+- Deploy to Vercel after env vars are configured.
+
+## SQLite -> Supabase Migration Script
+
+Run this from `assignment17-app`:
+
+1) Install migration dependency:
+- `python3 -m venv .venv`
+- `source .venv/bin/activate`
+- `pip install -r scripts/requirements-migration.txt`
+
+2) Set DB URL:
+- `export SUPABASE_DB_URL='postgresql://postgres:YOUR_PASSWORD@db.YOUR_REF.supabase.co:5432/postgres?sslmode=require'`
+
+3) Run migration:
+- `python scripts/migrate_sqlite_to_supabase.py`
+
+Notes:
+- Source SQLite defaults to `../shop.db`.
+- By default it truncates destination tables first (`TRUNCATE_FIRST=true`).
+- It migrates: `customers`, `products`, `orders`, `order_items`, `product_reviews`, `shipments`.
+- It prints row-count verification for each table.
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Push this repo to GitHub (or use Vercel CLI: `npx vercel`).
+2. In Vercel **Import Project**, set **Root Directory** to `assignment17-app` if your repo root is the parent folder.
+3. Add **Environment Variables** (Production + Preview):
+   - `NEXT_PUBLIC_SUPABASE_URL` — from Supabase Project Settings → API
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — publishable/anon key (same screen)
+4. Do **not** add `SUPABASE_DB_URL` to Vercel unless you run migrations from CI; keep DB passwords off the edge app.
+5. Deploy, then open the production URL and test Select Customer → Dashboard → Place Order → Warehouse.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Migration stays local: run `scripts/migrate_sqlite_to_supabase.py` from your machine when you need to refresh data.
