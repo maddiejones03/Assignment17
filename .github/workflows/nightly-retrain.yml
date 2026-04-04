@@ -1,0 +1,37 @@
+name: Nightly Model Retraining
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # Midnight MST (6 AM UTC)
+  workflow_dispatch:
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install jupyter nbconvert pandas scikit-learn joblib numpy
+
+      - name: Run notebook (retrain model)
+        run: |
+          jupyter nbconvert --to notebook --execute modelselection.ipynb \
+            --output modelselection_executed.ipynb \
+            --ExecutePreprocessor.timeout=600
+
+      - name: Commit updated model artifacts
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add fraud_model.joblib threshold.json feature_order.json
+          git diff --staged --quiet || git commit -m "chore: nightly model retrain $(date -u '+%Y-%m-%d')"
+          git push
