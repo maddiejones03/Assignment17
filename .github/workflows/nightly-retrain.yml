@@ -27,7 +27,7 @@ jobs:
         run: |
           jupyter nbconvert --to notebook --execute modelselection.ipynb \
             --output modelselection_executed.ipynb \
-            --ExecutePreprocessor.timeout=600
+            --ExecutePreprocessor.timeout=3600
 
       - name: Commit updated model artifacts
         run: |
