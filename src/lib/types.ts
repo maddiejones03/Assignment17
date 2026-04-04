@@ -13,7 +13,15 @@ export type Order = {
   amount: number;
   status: OrderStatus;
   created_at: string;
-  late_delivery_probability?: number;
+  /** Fraud probability from ML pipeline (same source as `orders.risk_score` in DB). */
+  fraud_risk_score?: number;
+  /** Binary fraud flag from model threshold (`orders.is_fraud`). */
+  is_fraud_predicted?: boolean;
+};
+
+/** Admin order history row */
+export type OrderAdminRow = Order & {
+  customer_name: string;
 };
 
 export type DashboardStats = {

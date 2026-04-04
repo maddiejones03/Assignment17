@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Assignment 17 Shop App",
-  description: "Customer dashboard and scoring pipeline starter app",
+  description: "Fraud detection ML pipeline and shop operations dashboard",
 };
 
 export default function RootLayout({

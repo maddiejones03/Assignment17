@@ -7,8 +7,8 @@ const links = [
   { href: "/", label: "Customers" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/orders/new", label: "Place Order" },
-  { href: "/orders/history", label: "Orders" },
-  { href: "/warehouse", label: "Warehouse" },
+  { href: "/orders/history", label: "All orders" },
+  { href: "/warehouse", label: "Fraud queue" },
 ] as const;
 
 export function AppNav() {

@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { getCustomerById, getDashboardStats, getOrdersByCustomer } from "@/lib/data";
+import { formatFraudPercent } from "@/lib/format";
 import { cookies } from "next/headers";
 import Link from "next/link";
 
@@ -55,12 +56,43 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      <section className="mt-8 rounded-xl border border-emerald-200/80 bg-emerald-50/60 p-5 dark:border-emerald-900 dark:bg-emerald-950/30">
+        <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Fraud ML pipeline</h3>
+        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          Run inference to update fraud probability and binary flags, then review the highest-risk orders before
+          fulfilling.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <form action="/api/scoring/run" method="POST">
+            <button
+              type="submit"
+              className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800"
+            >
+              Run fraud scoring
+            </button>
+          </form>
+          <Link
+            href="/warehouse"
+            className="inline-flex items-center rounded-lg border border-emerald-700 px-4 py-2.5 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-600 dark:text-emerald-200 dark:hover:bg-emerald-900/40"
+          >
+            Open fraud verification queue
+          </Link>
+        </div>
+      </section>
+
       <section className="mt-6">
-        <h3 className="mb-2 text-lg font-semibold">Recent Orders</h3>
+        <h3 className="mb-2 text-lg font-semibold">Recent orders</h3>
         <ul className="space-y-2">
           {orders.slice(0, 5).map((order) => (
-            <li key={order.order_id} className="rounded-md border p-3">
-              #{order.order_id} - ${order.amount.toFixed(2)} - {order.status}
+            <li key={order.order_id} className="rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-700">
+              <span className="font-medium">#{order.order_id}</span> · ${order.amount.toFixed(2)} · Fraud risk{" "}
+              {formatFraudPercent(order.fraud_risk_score)}
+              {order.is_fraud_predicted != null && (
+                <span className="text-zinc-500">
+                  {" "}
+                  ({order.is_fraud_predicted ? "flagged" : "clear"})
+                </span>
+              )}
             </li>
           ))}
         </ul>

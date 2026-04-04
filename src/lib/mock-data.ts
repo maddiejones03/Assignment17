@@ -16,7 +16,8 @@ export const mockOrders: Order[] = [
     amount: 120.5,
     status: "delivered",
     created_at: "2026-03-20T14:00:00.000Z",
-    late_delivery_probability: 0.11,
+    fraud_risk_score: 0.11,
+    is_fraud_predicted: false,
   },
   {
     order_id: 1002,
@@ -24,7 +25,8 @@ export const mockOrders: Order[] = [
     amount: 89.99,
     status: "late",
     created_at: "2026-03-22T17:30:00.000Z",
-    late_delivery_probability: 0.83,
+    fraud_risk_score: 0.83,
+    is_fraud_predicted: true,
   },
   {
     order_id: 1003,
@@ -32,7 +34,8 @@ export const mockOrders: Order[] = [
     amount: 220,
     status: "shipped",
     created_at: "2026-03-26T09:15:00.000Z",
-    late_delivery_probability: 0.42,
+    fraud_risk_score: 0.42,
+    is_fraud_predicted: false,
   },
   {
     order_id: 1004,
@@ -40,7 +43,8 @@ export const mockOrders: Order[] = [
     amount: 49.25,
     status: "placed",
     created_at: "2026-03-28T11:05:00.000Z",
-    late_delivery_probability: 0.19,
+    fraud_risk_score: 0.19,
+    is_fraud_predicted: false,
   },
 ];
 

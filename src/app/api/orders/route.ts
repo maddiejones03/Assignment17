@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const status = parseStatus(String(formData.get("status") ?? "placed"));
 
   if (!Number.isFinite(customerId) || !Number.isFinite(amount) || amount <= 0) {
-    redirect("/orders/new");
+    redirect("/orders/new?error=invalid");
   }
 
   const payload: NewOrderInput = {
@@ -25,6 +25,12 @@ export async function POST(request: Request) {
     status,
   };
 
-  await createOrder(payload);
-  redirect("/orders/history");
+  try {
+    await createOrder(payload);
+  } catch (e) {
+    console.error("createOrder failed:", e);
+    redirect("/orders/new?error=save_failed");
+  }
+
+  redirect("/orders/history?saved=1");
 }
