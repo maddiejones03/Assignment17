@@ -1,4 +1,9 @@
+/**
+ * Runtime data: Supabase when NEXT_PUBLIC_SUPABASE_* are set, else mock stores.
+ * SQLite `shop.db` is only for training/migration scripts, not read by this module.
+ */
 import { mockCustomers, mockOrders, nextOrderId } from "@/lib/mock-data";
+import { fetchFraudProbabilities } from "@/lib/ml-predict";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type {
   Customer,
@@ -17,6 +22,90 @@ function mapRiskToStatus(riskScore: number): Order["status"] {
   if (riskScore >= 0.5) return "shipped";
   if (riskScore >= 0.25) return "placed";
   return "delivered";
+}
+
+/** Approximate risk_score used when creating placeholder orders (not from ML). */
+function statusToRiskScore(status: Order["status"]): number {
+  switch (status) {
+    case "late":
+      return 0.85;
+    case "shipped":
+      return 0.55;
+    case "placed":
+      return 0.35;
+    default:
+      return 0.15;
+  }
+}
+
+type CustomerScoringEmbed = {
+  gender?: string | null;
+  birthdate?: string | null;
+  created_at?: string | null;
+  customer_created_at?: string | null;
+  state?: string | null;
+  customer_state?: string | null;
+  customer_segment?: string | null;
+  loyalty_tier?: string | null;
+  is_active?: number | null;
+} | null;
+
+type OrderScoringRow = {
+  order_id: number;
+  customer_id: number;
+  order_datetime: string;
+  billing_zip: string | null;
+  shipping_zip: string | null;
+  shipping_state: string | null;
+  payment_method: string;
+  device_type: string;
+  ip_country: string;
+  promo_used: number;
+  promo_code: string | null;
+  order_subtotal: number;
+  shipping_fee: number;
+  tax_amount: number;
+  order_total: number;
+  risk_score: number | null;
+  customers: CustomerScoringEmbed;
+};
+
+/** Maps joined Supabase row to the JSON contract expected by inference.py / the training notebook. */
+function orderRowToMlPayload(row: OrderScoringRow): Record<string, unknown> | null {
+  const c = row.customers;
+  if (!c) return null;
+  const customerCreated = c.customer_created_at ?? c.created_at;
+  const customerState = c.customer_state ?? c.state;
+  if (
+    customerCreated == null ||
+    customerCreated === "" ||
+    customerState == null ||
+    customerState === ""
+  ) {
+    return null;
+  }
+  return {
+    order_datetime: row.order_datetime,
+    billing_zip: row.billing_zip ?? "",
+    shipping_zip: row.shipping_zip ?? "",
+    shipping_state: row.shipping_state ?? "",
+    payment_method: row.payment_method,
+    device_type: row.device_type,
+    ip_country: row.ip_country,
+    promo_used: row.promo_used,
+    promo_code: row.promo_code,
+    order_subtotal: row.order_subtotal,
+    shipping_fee: row.shipping_fee,
+    tax_amount: row.tax_amount,
+    order_total: row.order_total,
+    gender: c.gender ?? "",
+    birthdate: c.birthdate ?? "",
+    customer_created_at: customerCreated,
+    customer_state: customerState,
+    customer_segment: c.customer_segment ?? "",
+    loyalty_tier: c.loyalty_tier ?? "",
+    is_active: c.is_active ?? 0,
+  };
 }
 
 export async function listCustomers(search = ""): Promise<Customer[]> {
@@ -112,14 +201,7 @@ export async function createOrder(input: NewOrderInput): Promise<Order> {
     const orderSubtotal = Number((input.amount / 1.09).toFixed(2));
     const taxAmount = Number((orderSubtotal * 0.07).toFixed(2));
     const shippingFee = Number((input.amount - orderSubtotal - taxAmount).toFixed(2));
-    const riskScore =
-      input.status === "late"
-        ? 0.85
-        : input.status === "shipped"
-          ? 0.55
-          : input.status === "placed"
-            ? 0.35
-            : 0.15;
+    const riskScore = statusToRiskScore(input.status);
 
     const payload = {
       customer_id: input.customer_id,
@@ -203,29 +285,73 @@ function deterministicScore(order: Order): number {
 
 export async function runScoring(): Promise<ScoringRunResult> {
   if (isSupabaseConfigured && supabase) {
-    const { data: orders, error } = await supabase
-      .from("orders")
-      .select("order_id,customer_id,order_total,order_datetime,risk_score");
+    const { data: rows, error } = await supabase.from("orders").select(`
+        order_id,
+        customer_id,
+        order_datetime,
+        billing_zip,
+        shipping_zip,
+        shipping_state,
+        payment_method,
+        device_type,
+        ip_country,
+        promo_used,
+        promo_code,
+        order_subtotal,
+        shipping_fee,
+        tax_amount,
+        order_total,
+        risk_score,
+        customers (
+          gender,
+          birthdate,
+          created_at,
+          state,
+          customer_segment,
+          loyalty_tier,
+          is_active
+        )
+      `);
     if (error) throw error;
 
-    const updates =
-      orders?.map((o) => ({
-        order_id: o.order_id,
-        risk_score: deterministicScore({
-          order_id: o.order_id,
-          customer_id: o.customer_id,
-          amount: Number(o.order_total),
-          status: mapRiskToStatus(Number(o.risk_score ?? 0)),
-          created_at: o.order_datetime,
-        }),
-      })) ?? [];
+    const ordersList = (rows ?? []) as OrderScoringRow[];
+    const mlPayloads: Record<string, unknown>[] = [];
+    const mlOrderIds: number[] = [];
+    for (const row of ordersList) {
+      const payload = orderRowToMlPayload(row);
+      if (payload) {
+        mlPayloads.push(payload);
+        mlOrderIds.push(row.order_id);
+      }
+    }
+
+    const mlProbs =
+      mlPayloads.length > 0 ? await fetchFraudProbabilities(mlPayloads) : null;
+    const probByOrderId = new Map<number, number>();
+    if (mlProbs && mlProbs.length === mlPayloads.length) {
+      mlOrderIds.forEach((id, idx) => {
+        probByOrderId.set(id, mlProbs[idx]!);
+      });
+    }
 
     let scoredCount = 0;
-    for (const update of updates) {
+    for (const o of ordersList) {
+      const fromMl = probByOrderId.get(o.order_id);
+      const riskScore =
+        fromMl !== undefined
+          ? fromMl
+          : deterministicScore({
+              order_id: o.order_id,
+              customer_id: o.customer_id,
+              amount: Number(o.order_total),
+              status: mapRiskToStatus(Number(o.risk_score ?? 0)),
+              created_at: o.order_datetime,
+            });
+
       const { error: updateError } = await supabase
         .from("orders")
-        .update({ risk_score: update.risk_score })
-        .eq("order_id", update.order_id);
+        .update({ risk_score: riskScore })
+        .eq("order_id", o.order_id);
       if (!updateError) scoredCount += 1;
     }
 
