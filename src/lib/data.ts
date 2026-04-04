@@ -1,5 +1,9 @@
+/**
+ * Runtime data: Supabase when NEXT_PUBLIC_SUPABASE_* are set, else mock stores.
+ * SQLite `shop.db` is only for training/migration scripts, not read by this module.
+ */
 import { mockCustomers, mockOrders, nextOrderId } from "@/lib/mock-data";
-import { scoreOrdersBatch } from "@/lib/fraudInference";
+import { fetchFraudProbabilities } from "@/lib/ml-predict";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type {
   Customer,
@@ -19,6 +23,90 @@ function normalizeFraudRisk(riskScore: number): number {
   const v = Number(riskScore);
   if (!Number.isFinite(v)) return 0;
   return v > 1 ? v / 100 : v;
+}
+
+/** Approximate risk_score used when creating placeholder orders (not from ML). */
+function statusToRiskScore(status: Order["status"]): number {
+  switch (status) {
+    case "late":
+      return 0.85;
+    case "shipped":
+      return 0.55;
+    case "placed":
+      return 0.35;
+    default:
+      return 0.15;
+  }
+}
+
+type CustomerScoringEmbed = {
+  gender?: string | null;
+  birthdate?: string | null;
+  created_at?: string | null;
+  customer_created_at?: string | null;
+  state?: string | null;
+  customer_state?: string | null;
+  customer_segment?: string | null;
+  loyalty_tier?: string | null;
+  is_active?: number | null;
+} | null;
+
+type OrderScoringRow = {
+  order_id: number;
+  customer_id: number;
+  order_datetime: string;
+  billing_zip: string | null;
+  shipping_zip: string | null;
+  shipping_state: string | null;
+  payment_method: string;
+  device_type: string;
+  ip_country: string;
+  promo_used: number;
+  promo_code: string | null;
+  order_subtotal: number;
+  shipping_fee: number;
+  tax_amount: number;
+  order_total: number;
+  risk_score: number | null;
+  customers: CustomerScoringEmbed;
+};
+
+/** Maps joined Supabase row to the JSON contract expected by inference.py / the training notebook. */
+function orderRowToMlPayload(row: OrderScoringRow): Record<string, unknown> | null {
+  const c = row.customers;
+  if (!c) return null;
+  const customerCreated = c.customer_created_at ?? c.created_at;
+  const customerState = c.customer_state ?? c.state;
+  if (
+    customerCreated == null ||
+    customerCreated === "" ||
+    customerState == null ||
+    customerState === ""
+  ) {
+    return null;
+  }
+  return {
+    order_datetime: row.order_datetime,
+    billing_zip: row.billing_zip ?? "",
+    shipping_zip: row.shipping_zip ?? "",
+    shipping_state: row.shipping_state ?? "",
+    payment_method: row.payment_method,
+    device_type: row.device_type,
+    ip_country: row.ip_country,
+    promo_used: row.promo_used,
+    promo_code: row.promo_code,
+    order_subtotal: row.order_subtotal,
+    shipping_fee: row.shipping_fee,
+    tax_amount: row.tax_amount,
+    order_total: row.order_total,
+    gender: c.gender ?? "",
+    birthdate: c.birthdate ?? "",
+    customer_created_at: customerCreated,
+    customer_state: customerState,
+    customer_segment: c.customer_segment ?? "",
+    loyalty_tier: c.loyalty_tier ?? "",
+    is_active: c.is_active ?? 0,
+  };
 }
 
 export async function listCustomers(search = ""): Promise<Customer[]> {
@@ -178,14 +266,7 @@ export async function createOrder(input: NewOrderInput): Promise<Order> {
     const orderSubtotal = Number((input.amount / 1.09).toFixed(2));
     const taxAmount = Number((orderSubtotal * 0.07).toFixed(2));
     const shippingFee = Number((input.amount - orderSubtotal - taxAmount).toFixed(2));
-    const riskScore =
-      input.status === "late"
-        ? 0.85
-        : input.status === "shipped"
-          ? 0.55
-          : input.status === "placed"
-            ? 0.35
-            : 0.15;
+    const riskScore = statusToRiskScore(input.status);
 
     const payload = {
       order_id: orderId,
@@ -263,107 +344,79 @@ export async function getFraudVerificationQueue(limit = 50): Promise<Order[]> {
     .slice(0, limit);
 }
 
-type CustomerJoin = {
-  gender: string | null;
-  birthdate: string | null;
-  created_at: string | null;
-  state: string | null;
-  customer_segment: string | null;
-  loyalty_tier: string | null;
-  is_active: number | null;
-};
-
-type OrderWithCustomer = Record<string, unknown> & {
-  order_id: number;
-  customers: CustomerJoin | CustomerJoin[] | null;
-};
-
-function firstCustomer(
-  c: CustomerJoin | CustomerJoin[] | null | undefined
-): CustomerJoin | null {
-  if (!c) return null;
-  return Array.isArray(c) ? (c[0] ?? null) : c;
-}
-
-function orderToScoringRow(o: OrderWithCustomer): Record<string, unknown> {
-  const c = firstCustomer(o.customers);
-  if (!c) {
-    throw new Error(`Order ${o.order_id} has no linked customer row`);
-  }
-  return {
-    order_id: o.order_id,
-    order_datetime: o.order_datetime,
-    billing_zip: o.billing_zip,
-    shipping_zip: o.shipping_zip,
-    shipping_state: o.shipping_state,
-    payment_method: o.payment_method,
-    device_type: o.device_type,
-    ip_country: o.ip_country,
-    promo_used: o.promo_used,
-    promo_code: o.promo_code,
-    order_subtotal: o.order_subtotal,
-    shipping_fee: o.shipping_fee,
-    tax_amount: o.tax_amount,
-    order_total: o.order_total,
-    is_fraud: o.is_fraud,
-    gender: c.gender,
-    birthdate: c.birthdate,
-    customer_created_at: c.created_at,
-    customer_state: c.state,
-    customer_segment: c.customer_segment,
-    loyalty_tier: c.loyalty_tier,
-    is_active: c.is_active,
-  };
-}
-
 /** Placeholder when Supabase is off (no DB join). */
 function placeholderFraudModelScore(orderId: number): number {
   const seed = ((orderId * 9301 + 49297) % 233280) / 233280;
   return Number(seed.toFixed(3));
 }
 
-/** Writes fraud scores to `orders.risk_score` and thresholded labels to `orders.is_fraud`. */
+/** Writes fraud scores to `orders.risk_score` (main branch: `/api/ml_predict` when configured). */
 export async function runScoring(): Promise<ScoringRunResult> {
   if (isSupabaseConfigured && supabase) {
-    const { data: orders, error } = await supabase.from("orders").select(`
-      *,
-      customers (
-        gender,
-        birthdate,
-        created_at,
-        state,
-        customer_segment,
-        loyalty_tier,
-        is_active
-      )
-    `);
+    const { data: rows, error } = await supabase.from("orders").select(`
+        order_id,
+        customer_id,
+        order_datetime,
+        billing_zip,
+        shipping_zip,
+        shipping_state,
+        payment_method,
+        device_type,
+        ip_country,
+        promo_used,
+        promo_code,
+        order_subtotal,
+        shipping_fee,
+        tax_amount,
+        order_total,
+        risk_score,
+        customers (
+          gender,
+          birthdate,
+          created_at,
+          state,
+          customer_segment,
+          loyalty_tier,
+          is_active
+        )
+      `);
     if (error) throw error;
 
-    const list = (orders ?? []) as OrderWithCustomer[];
-    const scoringRows = list.map((o) => orderToScoringRow(o));
-    const { probabilities, threshold } = await scoreOrdersBatch(scoringRows);
+    const ordersList = (rows ?? []) as OrderScoringRow[];
+    const mlPayloads: Record<string, unknown>[] = [];
+    const mlOrderIds: number[] = [];
+    for (const row of ordersList) {
+      const payload = orderRowToMlPayload(row);
+      if (payload) {
+        mlPayloads.push(payload);
+        mlOrderIds.push(row.order_id);
+      }
+    }
 
-    const rows = list.map((o, i) => {
-      const p = probabilities[i]!;
-      const { customers: _c, ...rest } = o;
-      return {
-        ...rest,
-        risk_score: p,
-        is_fraud: p >= threshold ? 1 : 0,
-      };
-    });
-
-    const chunkSize = 400;
-    for (let i = 0; i < rows.length; i += chunkSize) {
-      const chunk = rows.slice(i, i + chunkSize);
-      const { error: upsertErr } = await supabase.from("orders").upsert(chunk, {
-        onConflict: "order_id",
+    const mlProbs =
+      mlPayloads.length > 0 ? await fetchFraudProbabilities(mlPayloads) : null;
+    const probByOrderId = new Map<number, number>();
+    if (mlProbs && mlProbs.length === mlPayloads.length) {
+      mlOrderIds.forEach((id, idx) => {
+        probByOrderId.set(id, mlProbs[idx]!);
       });
-      if (upsertErr) throw upsertErr;
+    }
+
+    let scoredCount = 0;
+    for (const o of ordersList) {
+      const fromMl = probByOrderId.get(o.order_id);
+      const riskScore =
+        fromMl !== undefined ? fromMl : placeholderFraudModelScore(o.order_id);
+
+      const { error: updateError } = await supabase
+        .from("orders")
+        .update({ risk_score: riskScore })
+        .eq("order_id", o.order_id);
+      if (!updateError) scoredCount += 1;
     }
 
     return {
-      scored_count: rows.length,
+      scored_count: scoredCount,
       run_at: new Date().toISOString(),
     };
   }

@@ -1,15 +1,14 @@
 import { runScoring } from "@/lib/data";
-import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
 
 /** Allow enough time for batched scoring on large tables (Vercel Pro / higher limits). */
 export const maxDuration = 60;
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     await runScoring();
-  } catch (e) {
-    console.error("runScoring failed:", e);
-    redirect("/warehouse?error=scoring_failed");
+    return NextResponse.redirect(new URL("/warehouse", request.url));
+  } catch {
+    return NextResponse.redirect(new URL("/warehouse?error=scoring", request.url));
   }
-  redirect("/warehouse?scored=1");
 }
