@@ -20,7 +20,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install jupyter nbconvert pandas scikit-learn joblib numpy
+          pip install jupyter nbconvert pandas scikit-learn joblib numpy \
+            xgboost lightgbm catboost matplotlib seaborn
 
       - name: Run notebook (retrain model)
         run: |
