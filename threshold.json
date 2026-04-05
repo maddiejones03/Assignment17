@@ -1,4 +1,4 @@
 {
-  "threshold": 0.529881713370354,
-  "best_model": "logreg"
+  "threshold": 0.05278476265777799,
+  "best_model": "gb"
 }
